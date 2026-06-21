@@ -1,0 +1,1158 @@
+---
+title: "Analysis"
+author: "Raameen Ahmed"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 9,
+  fig.height = 5
+)
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+library(scales)
+library(knitr)
+library(tibble)
+library(purrr)
+library(broom)
+
+data <- read.csv("data2.csv", stringsAsFactors = FALSE)
+
+# Clean raw survey export
+data_clean <- data %>%
+  slice(-(1:2)) %>%
+  select(
+    Q0, Q0.1, Q1, Q2, Q3_1, Q4_1, Q5, Q6, Q7_1, Q8, Q9, Q10,
+    Q11, Q12_1, Q13_1, Q14_1, Q15_1, Q16_1, Q16_2, Q16_3,
+    Q17_1, Q18_1, Q19, Q20, Q21
+  )
+
+colnames(data_clean) <- c(
+  "q0_age",
+  "q0_education",
+  "q1_ai_use_freq",
+  "q2_ai_use_for",
+  "q3_times_per_week",
+  "q4_personal_info_freq",
+  "q5_prompts_not_stored",
+  "q6_data_used_for_training",
+  "q7_confidence_data_goes",
+  "q8_ai_always_accurate",
+  "q9_why_not_always_accurate",
+  "q10_where_data_goes",
+  "q11_shared_with_ai",
+  "q12_verify_before",
+  "q13_follow_without_check_before",
+  "q14_trust_ai_data",
+  "q15_risk_tax_docs",
+  "q16_rank_trust_ai",
+  "q16_rank_trust_human",
+  "q16_rank_depends_context",
+  "q17_verify_after",
+  "q18_follow_without_check_after",
+  "q19_avoid_sharing",
+  "q20_data_deleted_immediately",
+  "q21_safe_way_use_ai"
+)
+
+normalize_tf <- function(x) {
+  x <- trimws(as.character(x))
+  case_when(
+    x %in% c("True", "true", "1", 1) ~ "True",
+    x %in% c("False", "false", "2", 2) ~ "False",
+    TRUE ~ NA_character_
+  )
+}
+
+to_num_5 <- function(x) {
+  x <- trimws(as.character(x))
+  case_when(
+    x %in% c("1", "Extremely unconfident", "Never", "Not at all") ~ 1,
+    x %in% c("2", "Unconfident", "Rarely", "A little") ~ 2,
+    x %in% c("3", "I don't know", "Sometimes", "A moderate amount") ~ 3,
+    x %in% c("4", "Confident", "Often", "A lot") ~ 4,
+    x %in% c("5", "Extremely confident", "Always", "Completely") ~ 5,
+    TRUE ~ suppressWarnings(as.numeric(x))
+  )
+}
+
+to_num_4 <- function(x) {
+  x <- trimws(as.character(x))
+  case_when(
+    x %in% c("1", "Never follow without verification") ~ 1,
+    x %in% c("2", "Unlikely to follow without verification") ~ 2,
+    x %in% c("3", "Likely to follow without verification") ~ 3,
+    x %in% c("4", "Always follow without verification") ~ 4,
+    TRUE ~ suppressWarnings(as.numeric(x))
+  )
+}
+
+safe_chisq <- function(tbl) {
+  out <- tryCatch(
+    suppressWarnings(chisq.test(tbl)),
+    error = function(e) NULL
+  )
+
+  if (is.null(out)) {
+    tibble(statistic = NA_real_, df = NA_real_, p_value = NA_real_)
+  } else {
+    tibble(
+      statistic = unname(out$statistic),
+      df = unname(out$parameter),
+      p_value = out$p.value
+    )
+  }
+}
+
+analysis_data <- data_clean %>%
+  mutate(
+    age_group = case_when(
+      q0_age %in% c("1", 1, "10 - 19") ~ "10-19",
+      q0_age %in% c("2", 2, "20 - 29") ~ "20-29",
+      q0_age %in% c("3", 3, "30 - 39") ~ "30-39",
+      q0_age %in% c("4", 4, "40 - 49") ~ "40-49",
+      q0_age %in% c("5", 5, "50 - 59") ~ "50-59",
+      q0_age %in% c("6", 6, "60+") ~ "60+",
+      TRUE ~ as.character(q0_age)
+    ),
+    education_level = case_when(
+      q0_education %in% c("1", 1, "Elementary") ~ "Elementary",
+      q0_education %in% c("2", 2, "Middle School") ~ "Middle School",
+      q0_education %in% c("3", 3, "High School") ~ "High School",
+      q0_education %in% c("4", 4, "College") ~ "College",
+      q0_education %in% c("5", 5, "Recent Graduate") ~ "Recent Graduate",
+      q0_education %in% c("6", 6, "No degree") ~ "No degree",
+      q0_education %in% c("7", 7, "Long Time Graduate") ~ "Long Time Graduate",
+      TRUE ~ as.character(q0_education)
+    ),
+    q1_response = case_when(
+      q1_ai_use_freq %in% c("1", 1, "Multiple times a day") ~ "Multiple times a day",
+      q1_ai_use_freq %in% c("2", 2, "Once a day") ~ "Once a day",
+      q1_ai_use_freq %in% c("3", 3, "Weekly") ~ "Weekly",
+      q1_ai_use_freq %in% c("4", 4, "Rarely") ~ "Rarely",
+      q1_ai_use_freq %in% c("5", 5, "Never") ~ "Never",
+      TRUE ~ NA_character_
+    ),
+    q14_response = case_when(
+      q14_trust_ai_data %in% c("1", 1, "Not at all") ~ "Not at all",
+      q14_trust_ai_data %in% c("2", 2, "A little") ~ "A little",
+      q14_trust_ai_data %in% c("3", 3, "A moderate amount") ~ "A moderate amount",
+      q14_trust_ai_data %in% c("4", 4, "A lot") ~ "A lot",
+      q14_trust_ai_data %in% c("5", 5, "Completely") ~ "Completely",
+      TRUE ~ NA_character_
+    ),
+    q15_response = case_when(
+      q15_risk_tax_docs %in% c("1", 1, "Not risky") ~ "Not risky",
+      q15_risk_tax_docs %in% c("2", 2, "Somewhat risky") ~ "Somewhat risky",
+      q15_risk_tax_docs %in% c("3", 3, "Extremely risky") ~ "Extremely risky",
+      TRUE ~ NA_character_
+    ),
+    q5_clean = normalize_tf(q5_prompts_not_stored),
+    q6_clean = normalize_tf(q6_data_used_for_training),
+    q8_clean = normalize_tf(q8_ai_always_accurate),
+    q20_clean = normalize_tf(q20_data_deleted_immediately),
+    q5_wrong = if_else(q5_clean == "True", TRUE, FALSE, missing = NA),
+    q6_wrong = if_else(q6_clean == "False", TRUE, FALSE, missing = NA),
+    q8_wrong = if_else(q8_clean == "True", TRUE, FALSE, missing = NA),
+    q20_wrong = if_else(q20_clean == "True", TRUE, FALSE, missing = NA),
+    verify_text_before = to_num_5(q12_verify_before),
+    verify_text_after = to_num_5(q17_verify_after),
+    verify_links_before = 5 - to_num_4(q13_follow_without_check_before),
+    verify_links_after = 5 - to_num_4(q18_follow_without_check_after),
+    q11_raw = as.character(q11_shared_with_ai),
+    q11_passwords = if_else(str_detect(q11_raw, fixed("Passwords or credentials")), "Selected", "Not selected", missing = "Not selected"),
+    q11_documents = if_else(str_detect(q11_raw, fixed("Personal documents (IDs, resumes, etc.)")), "Selected", "Not selected", missing = "Not selected"),
+    q11_workschool = if_else(str_detect(q11_raw, fixed("Work/school confidential info")), "Selected", "Not selected", missing = "Not selected"),
+    q11_medlegal = if_else(str_detect(q11_raw, fixed("Medical/legal info")), "Selected", "Not selected", missing = "Not selected"),
+    q11_none = if_else(q11_raw == "None", "Selected", "Not selected", missing = "Not selected"),
+    q16_first_choice = case_when(
+      q16_rank_trust_ai %in% c("1", 1) ~ "AI assistant",
+      q16_rank_trust_human %in% c("1", 1) ~ "Human professional",
+      q16_rank_depends_context %in% c("1", 1) ~ "Depends on context",
+      TRUE ~ NA_character_
+    )
+  )
+
+wrong_long <- analysis_data %>%
+  select(age_group, education_level, q5_wrong, q6_wrong, q8_wrong, q20_wrong) %>%
+  pivot_longer(
+    cols = c(q5_wrong, q6_wrong, q8_wrong, q20_wrong),
+    names_to = "question",
+    values_to = "wrong"
+  ) %>%
+  mutate(
+    question = recode(
+      question,
+      q5_wrong = "Q5",
+      q6_wrong = "Q6",
+      q8_wrong = "Q8",
+      q20_wrong = "Q20"
+    )
+  )
+```
+
+# Analysis
+
+## 1. Do respondents appear aware of privacy and security risks?
+
+We first looked at how much respondents trust AI assistants with their data and whether trust changes based on how often they use AI.
+
+```{r ai-trust}
+q14_plot_data <- analysis_data %>%
+  filter(!is.na(q14_response)) %>%
+  mutate(
+    q14_response = factor(
+      q14_response,
+      levels = c("Not at all", "A little", "A moderate amount", "A lot", "Completely")
+    )
+  )
+
+ggplot(q14_plot_data, aes(x = q14_response, fill = q14_response)) +
+  geom_bar() +
+  stat_count(geom = "text", aes(label = after_stat(count)), vjust = -0.4) +
+  labs(
+    title = "How Much Do Respondents Trust AI?",
+    x = "Trust Level",
+    y = "Count of Users"
+  )
+```
+
+```{r ai-trust-with-frequency}
+plot_data <- analysis_data %>%
+  filter(!is.na(q1_response), !is.na(q14_response)) %>%
+  mutate(
+    q1_response = factor(
+      q1_response,
+      levels = c("Multiple times a day", "Once a day", "Weekly", "Rarely", "Never")
+    ),
+    q14_response = factor(
+      q14_response,
+      levels = c("Not at all", "A little", "A moderate amount", "A lot", "Completely")
+    )
+  )
+
+ggplot(plot_data, aes(x = q14_response, fill = q1_response)) +
+  geom_bar(position = "dodge", width = 0.5) +
+  labs(
+    title = "Trust in AI by AI Usage Frequency",
+    x = "Trust Level",
+    y = "Count of Users",
+    fill = "AI Use Frequency"
+  )
+```
+
+% of frewuent AI usage not trusting ai much
+```{r}
+frequent_ai_low_trust <- analysis_data %>%
+  filter(
+    !is.na(q1_response),
+    !is.na(q14_response),
+    q1_response == "Multiple times a day"
+  ) %>%
+  summarise(
+    total_frequent_users = n(),
+    low_trust_count = sum(q14_response %in% c("Not at all", "A little")),
+    low_trust_percent = round(100 * low_trust_count / total_frequent_users, 1)
+  )
+
+frequent_ai_low_trust
+```
+
+
+```{r chi-q1-q14}
+q1_q14_table <- table(plot_data$q1_response, plot_data$q14_response)
+q1_q14_chi <- safe_chisq(q1_q14_table)
+
+knitr::kable(
+  q1_q14_chi %>% mutate(across(where(is.numeric), ~round(., 4))),
+  caption = "Chi-Square Test: AI Usage Frequency vs. Trust in AI"
+)
+```
+
+Through the Chi-Square test, we did not find a statistically significant association between AI usage frequency and trust in AI in this sample.
+
+We also examined what kinds of information users said they had shared with AI.
+
+```{r info-shared-with-frequency}
+plot_data_q11 <- bind_rows(
+  analysis_data %>%
+    filter(!is.na(q1_response), str_detect(q11_raw, fixed("Passwords or credentials"))) %>%
+    transmute(q1_response, q11_response = "Passwords or credentials"),
+  analysis_data %>%
+    filter(!is.na(q1_response), str_detect(q11_raw, fixed("Personal documents (IDs, resumes, etc.)"))) %>%
+    transmute(q1_response, q11_response = "Personal documents (IDs, resumes, etc.)"),
+  analysis_data %>%
+    filter(!is.na(q1_response), str_detect(q11_raw, fixed("Work/school confidential info"))) %>%
+    transmute(q1_response, q11_response = "Work/school confidential info"),
+  analysis_data %>%
+    filter(!is.na(q1_response), str_detect(q11_raw, fixed("Medical/legal info"))) %>%
+    transmute(q1_response, q11_response = "Medical/legal info"),
+  analysis_data %>%
+    filter(!is.na(q1_response), q11_raw == "None") %>%
+    transmute(q1_response, q11_response = "None")
+) %>%
+  mutate(
+    q1_response = factor(
+      q1_response,
+      levels = c("Multiple times a day", "Once a day", "Weekly", "Rarely", "Never")
+    ),
+    q11_response = factor(
+      q11_response,
+      levels = c(
+        "Passwords or credentials",
+        "Personal documents (IDs, resumes, etc.)",
+        "Work/school confidential info",
+        "Medical/legal info",
+        "None"
+      )
+    )
+  )
+
+ggplot(plot_data_q11, aes(x = q11_response, fill = q1_response)) +
+  geom_bar(position = "dodge", width = 0.6) +
+  scale_x_discrete(labels = c(
+    "Passwords or credentials" = "Passwords /\ncredentials",
+    "Personal documents (IDs, resumes, etc.)" = "Personal\ndocuments",
+    "Work/school confidential info" = "Work/school\nconfidential info",
+    "Medical/legal info" = "Medical/\nlegal info",
+    "None" = "None"
+  )) +
+  labs(
+    title = "What Personal Information Users Have Shared with AI",
+    x = "Type of Information Shared",
+    y = "Amount of Users",
+    fill = "AI Usage Frequency"
+  ) 
+```
+% of frequent users that have entered somethign they shouldnt have into AI
+
+```{r}
+frequent_ai_q11_summary <- analysis_data %>%
+  filter(
+    !is.na(q1_response),
+    q1_response == "Multiple times a day"
+  ) %>%
+  summarise(
+    total_frequent_users = n(),
+    passwords_count = sum(q11_passwords == "Selected", na.rm = TRUE),
+    personal_docs_count = sum(q11_documents == "Selected", na.rm = TRUE),
+    workschool_count = sum(q11_workschool == "Selected", na.rm = TRUE),
+    medicallegal_count = sum(q11_medlegal == "Selected", na.rm = TRUE),
+    passwords_percent = round(100 * passwords_count / total_frequent_users, 1),
+    personal_docs_percent = round(100 * personal_docs_count / total_frequent_users, 1),
+    workschool_percent = round(100 * workschool_count / total_frequent_users, 1),
+    medicallegal_percent = round(100 * medicallegal_count / total_frequent_users, 1)
+  )
+
+frequent_ai_any_sensitive <- analysis_data %>%
+  filter(
+    !is.na(q1_response),
+    q1_response == "Multiple times a day"
+  ) %>%
+  mutate(
+    entered_at_least_one = q11_passwords == "Selected" |
+      q11_documents == "Selected" |
+      q11_workschool == "Selected" |
+      q11_medlegal == "Selected"
+  ) %>%
+  summarise(
+    total_frequent_users = n(),
+    count_entered_at_least_one = sum(entered_at_least_one, na.rm = TRUE),
+    percent_entered_at_least_one = round(
+      100 * count_entered_at_least_one / total_frequent_users, 1
+    )
+  )
+
+sensitive_by_usage_table <- analysis_data %>%
+  filter(
+    !is.na(q1_response),
+    q1_response %in% c("Multiple times a day", "Once a day")
+  ) %>%
+  mutate(
+    usage_group = case_when(
+      q1_response == "Multiple times a day" ~ "Frequent users",
+      q1_response == "Once a day" ~ "Once a day users"
+    ),
+    entered_at_least_one = q11_passwords == "Selected" |
+      q11_documents == "Selected" |
+      q11_workschool == "Selected" |
+      q11_medlegal == "Selected"
+  ) %>%
+  group_by(usage_group) %>%
+  summarise(
+    total_users = n(),
+    count_entered_at_least_one = sum(entered_at_least_one, na.rm = TRUE),
+    percent_entered_at_least_one = round(
+      100 * count_entered_at_least_one / total_users, 1
+    ),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    usage_group = factor(
+      usage_group,
+      levels = c("Frequent users", "Once a day users")
+    )
+  ) %>%
+  arrange(usage_group)
+
+sensitive_by_usage_table
+
+frequent_ai_any_sensitive
+
+frequent_ai_q11_summary
+
+summary_table <- tibble(
+  Finding = c(
+    "Frequent AI users with low trust in AI",
+    "Frequent AI users who input personal documents into AI",
+    "Frequent AI users who input at least one sensitive information type into AI",
+    "Once-a-day users who input at least one sensitive information type into AI"
+  ),
+  Percent = c("62.5%", "55%", "63%", "14%")
+)
+
+knitr::kable(
+  summary_table,
+  caption = "Summary of Trust and Sensitive Information Sharing Among AI Users",
+  align = c("l", "c")
+)
+```
+
+
+
+```{r chi-q1-q11}
+q11_freq_tests <- list(
+  "Passwords or credentials" = table(analysis_data$q1_response, analysis_data$q11_passwords),
+  "Personal documents" = table(analysis_data$q1_response, analysis_data$q11_documents),
+  "Work/school confidential info" = table(analysis_data$q1_response, analysis_data$q11_workschool),
+  "Medical/legal info" = table(analysis_data$q1_response, analysis_data$q11_medlegal),
+  "None" = table(analysis_data$q1_response, analysis_data$q11_none)
+)
+
+q11_freq_results <- imap_dfr(q11_freq_tests, ~safe_chisq(.x) %>% mutate(category = .y)) %>%
+  select(category, statistic, df, p_value)
+
+knitr::kable(
+  q11_freq_results %>% mutate(across(where(is.numeric), ~round(., 4))),
+  caption = "Chi-Square Tests: AI Usage Frequency vs. Q11 Sharing Categories"
+)
+```
+
+Through the Chi-Square test, we can see that specific input categories have a statistically significant correlation with AI usage frequency. The p-value for the personal documents and none categories are all significantly below .05, indicating that the user's AI usage frequency was associated with whether they input these information into AI.
+
+We then compared the same Q11 categories with users' reported trust in AI.
+
+```{r info-with-trust-levels}
+plot_data_q11_q14 <- bind_rows(
+  analysis_data %>%
+    filter(!is.na(q14_response), str_detect(q11_raw, fixed("Passwords or credentials"))) %>%
+    transmute(q14_response, q11_response = "Passwords or credentials"),
+  analysis_data %>%
+    filter(!is.na(q14_response), str_detect(q11_raw, fixed("Personal documents (IDs, resumes, etc.)"))) %>%
+    transmute(q14_response, q11_response = "Personal documents (IDs, resumes, etc.)"),
+  analysis_data %>%
+    filter(!is.na(q14_response), str_detect(q11_raw, fixed("Work/school confidential info"))) %>%
+    transmute(q14_response, q11_response = "Work/school confidential info"),
+  analysis_data %>%
+    filter(!is.na(q14_response), str_detect(q11_raw, fixed("Medical/legal info"))) %>%
+    transmute(q14_response, q11_response = "Medical/legal info"),
+  analysis_data %>%
+    filter(!is.na(q14_response), q11_raw == "None") %>%
+    transmute(q14_response, q11_response = "None")
+) %>%
+  mutate(
+    q11_response = factor(
+      q11_response,
+      levels = c(
+        "Passwords or credentials",
+        "Personal documents (IDs, resumes, etc.)",
+        "Work/school confidential info",
+        "Medical/legal info",
+        "None"
+      )
+    ),
+    q14_response = factor(
+      q14_response,
+      levels = c("Not at all", "A little", "A moderate amount", "A lot", "Completely")
+    )
+  )
+
+ggplot(plot_data_q11_q14, aes(x = q11_response, fill = q14_response)) +
+  geom_bar(position = "dodge", width = 0.6) +
+  scale_x_discrete(labels = c(
+    "Passwords or credentials" = "Passwords /\ncredentials",
+    "Personal documents (IDs, resumes, etc.)" = "Personal\ndocuments",
+    "Work/school confidential info" = "Work/school\nconfidential info",
+    "Medical/legal info" = "Medical /\nlegal info",
+    "None" = "None"
+  )) +
+  labs(
+    title = "What Personal Information Users Have Shared with AI",
+    x = "Type of Information Shared",
+    y = "Count",
+    fill = "Trust in AI"
+  )
+```
+
+```{r chi-q14-q11}
+q11_trust_tests <- list(
+  "Passwords or credentials" = table(analysis_data$q14_response, analysis_data$q11_passwords),
+  "Personal documents" = table(analysis_data$q14_response, analysis_data$q11_documents),
+  "Work/school confidential info" = table(analysis_data$q14_response, analysis_data$q11_workschool),
+  "Medical/legal info" = table(analysis_data$q14_response, analysis_data$q11_medlegal),
+  "None" = table(analysis_data$q14_response, analysis_data$q11_none)
+)
+
+q11_trust_results <- imap_dfr(q11_trust_tests, ~safe_chisq(.x) %>% mutate(category = .y)) %>%
+  select(category, statistic, df, p_value)
+
+knitr::kable(
+  q11_trust_results %>% mutate(across(where(is.numeric), ~round(., 4))),
+  caption = "Chi-Square Tests: Trust in AI vs. Q11 Sharing Categories"
+)
+```
+
+Through the Chi-Square test, we can see that specific input categories have a statistically significant correlation with trust in AI. The p-value for the passwords or credentials, personal documents, work/school confidential info, medical/legal info, and none categories are all significantly below .05, indicating that the user's trust level was associated with whether they input these information into AI.
+
+## 2. Who is most susceptible?
+
+We next looked at the knowledge test questions about data storage, data usage, and AI accuracy. These questions were designed to measure whether users hold misconceptions about AI data handling.
+
+```{r knowledge-overall}
+knowledge_overall <- analysis_data %>%
+  summarise(
+    Q5_wrong = sum(q5_wrong, na.rm = TRUE),
+    Q6_wrong = sum(q6_wrong, na.rm = TRUE),
+    Q8_wrong = sum(q8_wrong, na.rm = TRUE),
+    Q20_wrong = sum(q20_wrong, na.rm = TRUE)
+  ) %>%
+  pivot_longer(everything(), names_to = "question", values_to = "number_wrong")
+
+knitr::kable(knowledge_overall, caption = "Number of Wrong Answers for Each Knowledge Question")
+```
+
+### Wrong Answers by Age Group
+
+```{r wrong-by-age-group}
+wrong_age_100 <- wrong_long %>%
+  filter(!is.na(question), !is.na(age_group), !is.na(wrong), wrong == 1) %>%
+  mutate(
+    question = factor(question, levels = c("Q5", "Q6", "Q8", "Q20")),
+    age_group = factor(age_group, levels = c("10-19", "20-29", "30-39", "40-49", "50-59", "60+"))
+  ) %>%
+  group_by(age_group) %>%
+  filter(n() > 0) %>%
+  ungroup()
+
+chosen_colors <- c(
+  "10-19" = "#E66BF3",
+  "20-29" = "#17B37C",
+  "40-49" = "#02B1F6"
+)
+
+ggplot(wrong_age_100, aes(x = question, fill = age_group)) +
+  geom_bar(position = "fill", width = 0.75) +
+  scale_fill_manual(values = chosen_colors) +
+  scale_y_continuous(labels = percent_format()) +
+  labs(
+    title = "Distribution of Wrong Answers by Age Group",
+    x = "Question",
+    y = "Percent of Wrong Answers",
+    fill = "Age Group"
+  )
+```
+
+### Wrong Answers by Education Level
+
+```{r wrong-by-education-level}
+wrong_education_100 <- wrong_long %>%
+  filter(!is.na(question), !is.na(education_level), !is.na(wrong), wrong == 1) %>%
+  mutate(
+    question = factor(question, levels = c("Q5", "Q6", "Q8", "Q20")),
+    education_level = factor(
+      education_level,
+      levels = c(
+        "Elementary",
+        "Middle School",
+        "High School",
+        "College",
+        "Recent Graduate",
+        "Long Time Graduate",
+        "No degree"
+      )
+    )
+  ) %>%
+  group_by(education_level) %>%
+  filter(n() > 0) %>%
+  ungroup()
+
+ggplot(wrong_education_100, aes(x = question, fill = education_level)) +
+  geom_bar(position = "fill", width = 0.75) +
+  scale_fill_manual(values = c(
+    "High School" = "#02B1F6",
+    "College" = "#17B37C",
+    "Middle School" = "#E66BF3"
+  )) +
+  scale_y_continuous(labels = percent_format()) +
+  labs(
+    title = "Distribution of Wrong Answers by Education Level",
+    x = "Question",
+    y = "Percent of Wrong Answers",
+    fill = "Education Level"
+  )
+```
+
+The distribution of wrong answers was concentrated among respondents aged 20–29 and among respondents with college-level education. However, because these groups also made up a large share of the sample, this alone does not prove that they were inherently more susceptible from this sample.
+
+```{r, echo=FALSE}
+library(dplyr)
+library(broom)
+library(knitr)
+
+# build knowledge outcome
+model_data <- analysis_data %>%
+  mutate(
+    wrong_total = rowSums(cbind(q5_wrong, q6_wrong, q8_wrong, q20_wrong), na.rm = TRUE),
+    high_misconception = if_else(wrong_total >= 2, 1, 0)
+  ) %>%
+  filter(!is.na(age_group), !is.na(education_level))
+
+# optional: collapse sparse levels if needed
+model_data <- model_data %>%
+  mutate(
+    age_group = case_when(
+      age_group %in% c("10-19") ~ "10-19",
+      age_group %in% c("20-29") ~ "20-29",
+      TRUE ~ "Other ages"
+    ),
+    education_level = case_when(
+      education_level %in% c("High School") ~ "High School",
+      education_level %in% c("College") ~ "College",
+      TRUE ~ "Other education"
+    )
+  )
+
+# set reference groups
+model_data$age_group <- factor(
+  model_data$age_group,
+  levels = c("20-29", "10-19", "Other ages")
+)
+
+model_data$education_level <- factor(
+  model_data$education_level,
+  levels = c("College", "High School", "Other education")
+)
+
+# multiple logistic regression
+misconception_model <- glm(
+  high_misconception ~ age_group + education_level,
+  data = model_data,
+  family = binomial
+)
+
+# odds ratios table
+model_or <- broom::tidy(misconception_model, exponentiate = TRUE, conf.int = TRUE) %>%
+  select(term, estimate, conf.low, conf.high, p.value) %>%
+  mutate(across(where(is.numeric), ~ round(., 3)))
+
+knitr::kable(
+  model_or,
+  caption = "Multiple Logistic Regression Predicting High Misconception",
+  col.names = c("Term", "Odds Ratio", "CI Lower", "CI Upper", "p-value")
+)
+```
+
+A multiple logistic regression was explored to test whether age group and education level predicted high misconception, but the model produced unstable estimates and very large standard errors, likely due to sparse category counts. Therefore, it was not used as a primary basis for interpretation.
+
+## 3. Does education help?
+
+Users were first asked whether they verify text and links from AI. After reading the educational material, they were asked the same questions again.
+
+```{r education-effect}
+bar_data <- tibble(
+  education_stage = c("Before education", "Before education", "After education", "After education"),
+  verification_type = c("Verifying text", "Verifying links", "Verifying text", "Verifying links"),
+  avg_score = c(
+    mean(analysis_data$verify_text_before, na.rm = TRUE),
+    mean(analysis_data$verify_links_before, na.rm = TRUE),
+    mean(analysis_data$verify_text_after, na.rm = TRUE),
+    mean(analysis_data$verify_links_after, na.rm = TRUE)
+  )
+)
+
+bar_data$verification_type <- factor(
+  bar_data$verification_type,
+  levels = c("Verifying text", "Verifying links")
+)
+
+bar_data$education_stage <- factor(
+  bar_data$education_stage,
+  levels = c("Before education", "After education")
+)
+
+ggplot(bar_data, aes(x = education_stage, y = avg_score, fill = verification_type)) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.6) +
+  geom_text(
+    aes(label = round(avg_score, 2)),
+    position = position_dodge(width = 0.7),
+    vjust = -0.4,
+    size = 3
+  ) +
+  scale_fill_manual(
+    values = c("Verifying text" = "blue", "Verifying links" = "purple")
+  ) +
+  labs(
+    title = "User Verification Behavior Before and After Education",
+    x = "",
+    y = "Average verification score",
+    fill = ""
+  ) +
+  ylim(0, 5)
+```
+
+Because these are paired before-and-after responses from the same users, a chi-square test is not the right test here. A paired nonparametric test is more appropriate.
+
+```{r education-tests}
+wilcox_text <- wilcox.test(
+  analysis_data$verify_text_before,
+  analysis_data$verify_text_after,
+  paired = TRUE,
+  exact = FALSE
+)
+
+wilcox_links <- wilcox.test(
+  analysis_data$verify_links_before,
+  analysis_data$verify_links_after,
+  paired = TRUE,
+  exact = FALSE
+)
+
+education_test_results <- tibble(
+  measure = c("Verifying text", "Verifying links"),
+  statistic = c(unname(wilcox_text$statistic), unname(wilcox_links$statistic)),
+  p_value = c(wilcox_text$p.value, wilcox_links$p.value)
+)
+
+knitr::kable(
+  education_test_results %>% mutate(across(where(is.numeric), ~round(., 4))),
+  caption = "Paired Wilcoxon Tests: Before vs. After Education"
+)
+```
+
+The educational intervention significantly improved how often users said they would verify both AI-generated text and links. The change was statistically significant for text (p=0.0157) and even more significant for links (p=0.0003).
+
+```{r}
+library(dplyr)
+library(tidyr)
+
+# remove the label row
+analysis_data <- data_clean %>%
+  slice(-1)
+
+# helper function for True/False questions
+normalize_tf <- function(x) {
+  x <- trimws(as.character(x))
+  case_when(
+    x %in% c("True", "true", "1", 1) ~ "True",
+    x %in% c("False", "false", "2", 2) ~ "False",
+    TRUE ~ NA_character_
+  )
+}
+
+# clean age + education + mark wrong answers
+analysis_data <- analysis_data %>%
+  mutate(
+    age_group = case_when(
+      q0_age %in% c("1", 1, "10 - 19") ~ "10-19",
+      q0_age %in% c("2", 2, "20 - 29") ~ "20-29",
+      q0_age %in% c("3", 3, "30 - 39") ~ "30-39",
+      q0_age %in% c("4", 4, "40 - 49") ~ "40-49",
+      q0_age %in% c("5", 5, "50 - 59") ~ "50-59",
+      q0_age %in% c("6", 6, "60+") ~ "60+",
+      TRUE ~ as.character(q0_age)
+    ),
+    
+    education_level = case_when(
+      q0_education %in% c("1", 1, "Elementary") ~ "Elementary",
+      q0_education %in% c("2", 2, "Middle School") ~ "Middle School",
+      q0_education %in% c("3", 3, "High School") ~ "High School",
+      q0_education %in% c("4", 4, "College") ~ "College",
+      q0_education %in% c("5", 5, "Recent Graduate") ~ "Recent Graduate",
+      q0_education %in% c("6", 6, "No degree") ~ "No degree",
+      q0_education %in% c("7", 7, "Long Time Graduate") ~ "Long Time Graduate",
+      TRUE ~ as.character(q0_education)
+    ),
+    
+    q5_clean  = normalize_tf(q5_prompts_not_stored),
+    q6_clean  = normalize_tf(q6_data_used_for_training),
+    q8_clean  = normalize_tf(q8_ai_always_accurate),
+    q20_clean = normalize_tf(q20_data_deleted_immediately),
+    
+    # mark wrong answers
+    q5_wrong  = if_else(q5_clean  == "True",  TRUE, FALSE, missing = NA),   # should be False
+    q6_wrong  = if_else(q6_clean  == "False", TRUE, FALSE, missing = NA),   # should be True
+    q8_wrong  = if_else(q8_clean  == "True",  TRUE, FALSE, missing = NA),   # should be False
+    q20_wrong = if_else(q20_clean == "True",  TRUE, FALSE, missing = NA)    # should be False
+  )
+
+# reshape to long format
+wrong_long <- analysis_data %>%
+  select(age_group, education_level, q5_wrong, q6_wrong, q8_wrong, q20_wrong) %>%
+  pivot_longer(
+    cols = c(q5_wrong, q6_wrong, q8_wrong, q20_wrong),
+    names_to = "question",
+    values_to = "wrong"
+  ) %>%
+  mutate(
+    question = recode(
+      question,
+      q5_wrong  = "Q5",
+      q6_wrong  = "Q6",
+      q8_wrong  = "Q8",
+      q20_wrong = "Q20"
+    )
+  )
+
+# 1) overall summary
+overall_wrong_summary <- wrong_long %>%
+  filter(!is.na(wrong)) %>%
+  group_by(question) %>%
+  summarise(
+    total_answered = n(),
+    number_wrong = sum(wrong),
+    percent_wrong = round(100 * mean(wrong), 1),
+    .groups = "drop"
+  )
+
+overall_wrong_summary
+
+# 2) by age group
+wrong_by_age <- wrong_long %>%
+  filter(!is.na(age_group), !is.na(wrong)) %>%
+  group_by(question, age_group) %>%
+  summarise(
+    total_in_group = n(),
+    number_wrong = sum(wrong),
+    percent_wrong = round(100 * mean(wrong), 1),
+    .groups = "drop"
+  ) %>%
+  arrange(question, age_group)
+
+wrong_by_age
+
+# 3) by education level
+wrong_by_education <- wrong_long %>%
+  filter(!is.na(education_level), !is.na(wrong)) %>%
+  group_by(question, education_level) %>%
+  summarise(
+    total_in_group = n(),
+    number_wrong = sum(wrong),
+    percent_wrong = round(100 * mean(wrong), 1),
+    .groups = "drop"
+  ) %>%
+  arrange(question, education_level)
+
+wrong_by_education
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# use cleaned data directly
+analysis_data <- data_clean
+
+# helper function for True/False questions
+normalize_tf <- function(x) {
+  x <- trimws(as.character(x))
+  case_when(
+    x %in% c("True", "true", "1", 1) ~ "True",
+    x %in% c("False", "false", "2", 2) ~ "False",
+    TRUE ~ NA_character_
+  )
+}
+
+# mark wrong answers
+analysis_data <- analysis_data %>%
+  mutate(
+    q5_clean  = normalize_tf(q5_prompts_not_stored),
+    q6_clean  = normalize_tf(q6_data_used_for_training),
+    q8_clean  = normalize_tf(q8_ai_always_accurate),
+    q20_clean = normalize_tf(q20_data_deleted_immediately),
+
+    q5_wrong  = if_else(q5_clean  == "True",  TRUE, FALSE, missing = NA),   # correct = False
+    q6_wrong  = if_else(q6_clean  == "False", TRUE, FALSE, missing = NA),   # correct = True
+    q8_wrong  = if_else(q8_clean  == "True",  TRUE, FALSE, missing = NA),   # correct = False
+    q20_wrong = if_else(q20_clean == "True",  TRUE, FALSE, missing = NA)    # correct = False
+  )
+
+# summary table
+overall_wrong_summary <- analysis_data %>%
+  summarise(
+    `Q5: Prompts not stored` = sum(q5_wrong, na.rm = TRUE),
+    `Q6: Data used for training/logging` = sum(q6_wrong, na.rm = TRUE),
+    `Q8: AI always accurate` = sum(q8_wrong, na.rm = TRUE),
+    `Q20: Data deleted immediately` = sum(q20_wrong, na.rm = TRUE)
+  ) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "question",
+    values_to = "number_wrong"
+  )
+
+ggplot(overall_wrong_summary, aes(x = question, y = number_wrong, fill = question)) +
+  geom_col(width = .7) +
+  geom_text(aes(label = number_wrong), vjust = -0.4, size = 4) +
+  labs(
+    title = "Number of Users Who Got Each Knowledge Question Wrong",
+    x = "",
+    y = "Amount of Users"
+  ) +
+  ylim(0, max(overall_wrong_summary$number_wrong) + 5) +
+  theme(legend.position = "none")
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(scales)
+
+# use cleaned data directly
+analysis_data <- data_clean
+
+# helper function for True/False questions
+normalize_tf <- function(x) {
+  x <- trimws(as.character(x))
+  case_when(
+    x %in% c("True", "true", "1", 1) ~ "True",
+    x %in% c("False", "false", "2", 2) ~ "False",
+    TRUE ~ NA_character_
+  )
+}
+
+# mark wrong answers
+analysis_data <- analysis_data %>%
+  mutate(
+    q5_clean  = normalize_tf(q5_prompts_not_stored),
+    q6_clean  = normalize_tf(q6_data_used_for_training),
+    q8_clean  = normalize_tf(q8_ai_always_accurate),
+    q20_clean = normalize_tf(q20_data_deleted_immediately),
+
+    q5_wrong  = if_else(q5_clean  == "True",  "Wrong", "Correct", missing = NA_character_),
+    q6_wrong  = if_else(q6_clean  == "False", "Wrong", "Correct", missing = NA_character_),
+    q8_wrong  = if_else(q8_clean  == "True",  "Wrong", "Correct", missing = NA_character_),
+    q20_wrong = if_else(q20_clean == "True",  "Wrong", "Correct", missing = NA_character_)
+  )
+
+wrong_fill_data <- analysis_data %>%
+  select(q5_wrong, q6_wrong, q8_wrong, q20_wrong) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "question",
+    values_to = "response_type"
+  ) %>%
+  filter(!is.na(response_type)) %>%
+  mutate(
+    question = recode(
+      question,
+      q5_wrong = "Q5",
+      q6_wrong = "Q6",
+      q8_wrong = "Q8",
+      q20_wrong = "Q20"
+    ),
+    question = factor(question, levels = c("Q5", "Q6", "Q8", "Q20")),
+    response_type = factor(response_type, levels = c("Correct", "Wrong"))
+  )
+
+ggplot(wrong_fill_data, aes(x = question, fill = response_type)) +
+  geom_bar(position = "fill", width = 0.7) +
+  scale_fill_manual(values = c("Correct" = "#17B58E", "Wrong" = "#FF7370")) +
+  scale_x_discrete(labels = c(
+  "Q5" = "Q5:\nPrompts not stored",
+  "Q6" = "Q6:\nData used for\ntraining/logging",
+  "Q8" = "Q8:\nAI always\naccurate",
+  "Q20" = "Q20:\nData deleted\nimmediately"
+)) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    title = "Proportion of Correct vs. Wrong Responses by Knowledge Question",
+    x = "",
+    y = "Proportion of Users",
+    fill = "Response"
+  ) +
+  theme(legend.position = "none") 
+```
+
+
+```{r}
+library(dplyr)
+library(tidyr)
+
+normalize_tf <- function(x) {
+  x <- trimws(as.character(x))
+  case_when(
+    x %in% c("True", "true", "1", 1) ~ "True",
+    x %in% c("False", "false", "2", 2) ~ "False",
+    TRUE ~ NA_character_
+  )
+}
+
+misconception_scores <- data_clean %>%
+  mutate(
+    q5_ans  = normalize_tf(q5_prompts_not_stored),
+    q6_ans  = normalize_tf(q6_data_used_for_training),
+    q8_ans  = normalize_tf(q8_ai_always_accurate),
+    q20_ans = normalize_tf(q20_data_deleted_immediately)
+  ) %>%
+  rowwise() %>%
+  mutate(
+    misconception_score =
+      0L +
+      if_else(!is.na(q5_ans)  && q5_ans  != "False", 1L, 0L) +   # Q5 correct = False
+      if_else(!is.na(q6_ans)  && q6_ans  != "True",  1L, 0L) +   # Q6 correct = True
+      if_else(!is.na(q8_ans)  && q8_ans  != "False", 1L, 0L) +   # Q8 correct = False
+      if_else(!is.na(q20_ans) && q20_ans != "False", 1L, 0L)     # Q20 correct = False
+  ) %>%
+  ungroup()
+
+misconception_score_table <- misconception_scores %>%
+  count(misconception_score, name = "count") %>%
+  complete(misconception_score = 0:4, fill = list(count = 0)) %>%
+  mutate(percent = round(100 * count / sum(count), 1)) %>%
+  arrange(misconception_score)
+
+misconception_score_table_nice <- misconception_score_table %>%
+  mutate(percent = paste0(percent, "%"))
+
+knitr::kable(
+  misconception_score_table_nice,
+  caption = "Distribution of Misconception Scores",
+  col.names = c("Misconception Score", "Count", "Percent"),
+  align = c("c", "c", "c")
+)
+
+```
+
+```{r}
+library(tibble)
+library(dplyr)
+library(knitr)
+
+misconception_score_table <- tibble(
+  misconception_score = c(0, 1, 2, 3, 4),
+  count = c(45, 5, 4, 7, 0)
+) %>%
+  mutate(
+    proportion = round(100 * count / sum(count), 1),
+    proportion = paste0(proportion, "%")
+  )
+
+knitr::kable(
+  misconception_score_table,
+  caption = "Distribution of Misconception Scores",
+  col.names = c("Misconception Score", "Count", "Proportion"),
+  align = c("c", "c", "c")
+)
+```
+
+```{r}
+library(ggplot2)
+
+# ---------------------------------------------------------
+# Graph 1: Confidence Count
+# ---------------------------------------------------------
+df_confidence <- data.frame(
+  Confidence = factor(
+    c("Unconfident", "Confident", "IDK", "Extremely Unconfident", "Extremely Confident"),
+    levels = c("Unconfident", "Confident", "IDK", "Extremely Unconfident", "Extremely Confident")
+  ),
+  Count = c(16, 14, 14, 6, 5)
+)
+
+plot_confidence <- ggplot(df_confidence, aes(x = Confidence, y = Count, fill = Confidence)) +
+  geom_bar(stat = "identity", width = 0.4) +
+  ggtitle("User Confidence for AI Data Usage") +
+  scale_y_continuous(breaks = seq(0, 16, by = 2), expand = c(0, 0), limits = c(0, 17)) +   theme(legend.position = "none") +
+  xlab("Confidence Level") +
+  ylab("Amount of Respondents")
+
+print(plot_confidence)
+
+# ---------------------------------------------------------
+# Graph 2: Risk Assessment Distribution
+# ---------------------------------------------------------
+df_risk <- data.frame(
+  Risk_Level = factor(
+    c("Extremely Risky", "Somewhat Risky", "Not Risky"),
+    levels = c("Extremely Risky", "Somewhat Risky", "Not Risky")
+  ),
+  Count = c(35, 15, 3)
+)
+
+plot_risk <- ggplot(df_risk, aes(x = Risk_Level, y = Count, fill = Risk_Level)) +
+  geom_bar(stat = "identity", width = 0.4) +
+  ggtitle("Risk Assessment Distribution") +
+  xlab("Risk Level") +
+  scale_y_continuous(breaks = seq(0, 35, by = 5), expand = c(0, 0), limits = c(0, 37)) +
+  theme(legend.position = "none") +
+  ylab("Amount of Respondents")
+
+print(plot_risk)
+```
+
+```{r}
+library(ggplot2)
+
+# ---------------------------------------------------------
+# Graph 1: Average Misconception Score by Education Level
+# ---------------------------------------------------------
+df_edu <- data.frame(
+  Education_Level = factor(
+    c("College", "High School", "Long Time Graduate", "Middle School", "No Degree", "Recent Graduate"),
+    levels = c("College", "High School", "Long Time Graduate", "Middle School", "No Degree", "Recent Graduate")
+  ),
+  Score = c(0.68, 1.0, 0, 0.33, 0, 0)
+)
+
+plot_edu <- ggplot(df_edu, aes(x = Education_Level, y = Score, fill = Education_Level)) +
+  geom_bar(stat = "identity") +
+  ggtitle("Average Misconception Score by Education Level") +
+  xlab("Education Level") + 
+  ylab("Average Misconception Score") +
+  scale_y_continuous(breaks = seq(0, 1.0, by = 0.2), expand = c(0, 0), limits = c(0, 1.05)) +
+  theme(legend.position = "none")
+
+print(plot_edu)
+
+# ---------------------------------------------------------
+# Graph 2: Average Misconception Score by Age Group
+# ---------------------------------------------------------
+df_age <- data.frame(
+  Age_Group = factor(
+    c("10 - 19", "20 - 29", "30 - 39", "40 - 49", "50 - 59", "60+"),
+    levels = c("10 - 19", "20 - 29", "30 - 39", "40 - 49", "50 - 59", "60+")
+  ),
+  Score = c(0.42, 0.73, 0, 0.40, 0, 0)
+)
+
+plot_age <- ggplot(df_age, aes(x = Age_Group, y = Score, fill = Age_Group)) +
+  geom_bar(stat = "identity") +
+  ggtitle("Average Misconception Score by Age Group") +
+  xlab("Age Group") + 
+  ylab("Average Misconception Score") +
+  scale_y_continuous(breaks = seq(0, 0.7, by = 0.1), expand = c(0, 0), limits = c(0, 0.75)) +
+  theme(legend.position = "none")
+
+print(plot_age)
+```
+
