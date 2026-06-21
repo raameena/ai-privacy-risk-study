@@ -44,7 +44,7 @@ ai-privacy-risk-study/
 ├── README.md
 ├── report/
 │   ├── IEEE_Final_Report.pdf
-│   └── Data_Analysis_And_Findings.pdf
+│   └── Data_Analysis_and_Findings.pdf
 └── analysis/
     └── Analysis.Rmd
 ```
